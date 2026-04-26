@@ -1,0 +1,63 @@
+from __future__ import annotations
+
+import re
+
+from .schemas import ToolCall
+
+
+def _extract_after(text: str, prefixes: list[str]) -> str:
+    low = text.lower()
+    for p in prefixes:
+        if p in low:
+            idx = low.index(p) + len(p)
+            return text[idx:].strip()
+    return text.strip()
+
+
+def plan_tool(user_text: str) -> ToolCall | None:
+    low = user_text.lower().strip()
+
+    if any(k in low for k in ["what time", "current time"]):
+        return ToolCall(name="now")
+    if any(k in low for k in ["system info", "os info", "machine info"]):
+        return ToolCall(name="system_info")
+    if low.startswith("search ") or "web search" in low or low.startswith("look up "):
+        q = _extract_after(user_text, ["search ", "web search", "look up "])
+        return ToolCall(name="web_search", args={"query": q})
+    if low.startswith("read file ") or low.startswith("open file "):
+        path = _extract_after(user_text, ["read file ", "open file "])
+        return ToolCall(name="read_file", args={"path": path})
+    if low.startswith("list dir") or low.startswith("list files"):
+        path = _extract_after(user_text, ["list dir", "list files"]).strip() or "."
+        return ToolCall(name="list_dir", args={"path": path})
+    if low.startswith("run "):
+        cmd = _extract_after(user_text, ["run "])
+        return ToolCall(name="run_shell", args={"command": cmd})
+    if low.startswith("write file "):
+        payload = _extract_after(user_text, ["write file "])
+        return ToolCall(name="write_file", args={"payload": payload})
+    if low.startswith("api "):
+        rest = _extract_after(user_text, ["api "])
+        parts = rest.split(" ", maxsplit=1)
+        if not parts:
+            return None
+        api_name = parts[0].strip()
+        query = parts[1].strip() if len(parts) > 1 else ""
+        return ToolCall(name="api_call", args={"payload": f"{api_name}:::{query}"})
+    if low.startswith("rag index"):
+        path = _extract_after(user_text, ["rag index"]).strip() or "."
+        return ToolCall(name="rag_index", args={"path": path})
+    if low.startswith("rag ask "):
+        query = _extract_after(user_text, ["rag ask "])
+        return ToolCall(name="rag_query", args={"query": query})
+    if low.startswith("plugin "):
+        rest = _extract_after(user_text, ["plugin "])
+        parts = rest.split(" ", maxsplit=1)
+        if not parts:
+            return None
+        pname = parts[0].strip()
+        query = parts[1].strip() if len(parts) > 1 else ""
+        return ToolCall(name=pname, args={"query": query})
+    if re.search(r"\b(exit|quit|shutdown assistant)\b", low):
+        return ToolCall(name="exit")
+    return None

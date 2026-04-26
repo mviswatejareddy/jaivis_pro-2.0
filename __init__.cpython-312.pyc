@@ -1,0 +1,68 @@
+from __future__ import annotations
+
+import argparse
+from pathlib import Path
+
+from .audio.stt import transcribe_once
+from .audio.tts import Speaker
+from .agent.runtime import JarvisAgentRuntime
+from .core.assistant import JarvisAssistant
+from .core.wakeword import should_process, strip_wake_word
+
+
+def run_text_mode(agent: JarvisAgentRuntime, strict_wake_word: bool) -> None:
+    print("Jarvis Pro running in text mode. Type 'exit' to stop.")
+    while True:
+        user_text = input("You: ").strip()
+        if not user_text:
+            continue
+        if not should_process(user_text, strict=strict_wake_word):
+            print("Jarvis: Waiting for wake word 'jarvis'.")
+            continue
+        if strict_wake_word:
+            user_text = strip_wake_word(user_text)
+        result = agent.handle(user_text)
+        print(f"Jarvis: {result.response}")
+        if result.should_exit:
+            break
+
+
+def run_voice_mode(agent: JarvisAgentRuntime, strict_wake_word: bool) -> None:
+    speaker = Speaker()
+    speaker.say("Jarvis Pro is online.")
+    while True:
+        try:
+            user_text = transcribe_once()
+            print(f"You said: {user_text}")
+            if not should_process(user_text, strict=strict_wake_word):
+                continue
+            if strict_wake_word:
+                user_text = strip_wake_word(user_text)
+            result = agent.handle(user_text)
+            print(f"Jarvis: {result.response}")
+            speaker.say(result.response)
+            if result.should_exit:
+                break
+        except Exception as exc:
+            msg = f"Voice pipeline error: {exc}"
+            print(msg)
+            speaker.say("I encountered an audio error. Please try again.")
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description="Jarvis Pro Assistant")
+    parser.add_argument("--mode", choices=["text", "voice"], default="text")
+    parser.add_argument("--strict-wake-word", action="store_true")
+    args = parser.parse_args()
+
+    fallback_bot = JarvisAssistant()
+    workspace_root = Path(__file__).resolve().parents[3]
+    agent = JarvisAgentRuntime(workspace_root=workspace_root, fallback_assistant=fallback_bot)
+    if args.mode == "voice":
+        run_voice_mode(agent, strict_wake_word=args.strict_wake_word)
+    else:
+        run_text_mode(agent, strict_wake_word=args.strict_wake_word)
+
+
+if __name__ == "__main__":
+    main()

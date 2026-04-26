@@ -1,0 +1,30 @@
+from __future__ import annotations
+
+import importlib.util
+from pathlib import Path
+from types import ModuleType
+from typing import Callable
+
+
+def _load_module(path: Path) -> ModuleType | None:
+    spec = importlib.util.spec_from_file_location(path.stem, path)
+    if spec is None or spec.loader is None:
+        return None
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+def load_plugins(plugin_dir: Path) -> dict[str, Callable[[str], str]]:
+    tools: dict[str, Callable[[str], str]] = {}
+    if not plugin_dir.exists():
+        return tools
+    for py in plugin_dir.glob("*.py"):
+        mod = _load_module(py)
+        if mod and hasattr(mod, "register"):
+            reg = mod.register()
+            if isinstance(reg, dict):
+                for k, v in reg.items():
+                    if callable(v):
+                        tools[k] = v
+    return tools

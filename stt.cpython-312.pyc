@@ -1,0 +1,166 @@
+from __future__ import annotations
+
+import threading
+import uuid
+from datetime import datetime
+from pathlib import Path
+import sqlite3
+
+
+class AgentStore:
+    def __init__(self, data_dir: Path) -> None:
+        self.data_dir = data_dir
+        self.data_dir.mkdir(parents=True, exist_ok=True)
+        self.db_path = self.data_dir / "jarvis.db"
+        self._lock = threading.Lock()
+        self._init_db()
+
+    def _conn(self) -> sqlite3.Connection:
+        conn = sqlite3.connect(self.db_path)
+        conn.row_factory = sqlite3.Row
+        return conn
+
+    def _init_db(self) -> None:
+        with self._conn() as conn:
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS jobs (
+                    id TEXT PRIMARY KEY,
+                    message TEXT NOT NULL,
+                    role TEXT NOT NULL,
+                    status TEXT NOT NULL,
+                    result TEXT,
+                    created_at TEXT NOT NULL
+                )
+                """
+            )
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS approvals (
+                    id TEXT PRIMARY KEY,
+                    job_id TEXT,
+                    action TEXT NOT NULL,
+                    payload TEXT NOT NULL,
+                    status TEXT NOT NULL,
+                    created_at TEXT NOT NULL
+                )
+                """
+            )
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS logs (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    ts TEXT NOT NULL,
+                    event TEXT NOT NULL,
+                    payload TEXT NOT NULL
+                )
+                """
+            )
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS events (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    ts TEXT NOT NULL,
+                    event TEXT NOT NULL,
+                    payload TEXT NOT NULL
+                )
+                """
+            )
+
+    def log(self, event: str, payload: dict) -> None:
+        import json
+        ts = datetime.utcnow().isoformat()
+        with self._lock:
+            with self._conn() as conn:
+                conn.execute("INSERT INTO logs(ts, event, payload) VALUES (?,?,?)", (ts, event, json.dumps(payload)))
+                conn.execute("INSERT INTO events(ts, event, payload) VALUES (?,?,?)", (ts, event, json.dumps(payload)))
+
+    def list_logs(self, limit: int = 100) -> list[dict]:
+        import json
+        with self._conn() as conn:
+            rows = conn.execute("SELECT ts, event, payload FROM logs ORDER BY id DESC LIMIT ?", (limit,)).fetchall()
+        return [{"ts": r["ts"], "event": r["event"], "payload": json.loads(r["payload"])} for r in rows][::-1]
+
+    def list_events_after(self, last_id: int = 0, limit: int = 100) -> list[dict]:
+        import json
+        with self._conn() as conn:
+            rows = conn.execute(
+                "SELECT id, ts, event, payload FROM events WHERE id > ? ORDER BY id ASC LIMIT ?",
+                (last_id, limit),
+            ).fetchall()
+        return [
+            {"id": r["id"], "ts": r["ts"], "event": r["event"], "payload": json.loads(r["payload"])}
+            for r in rows
+        ]
+
+    def create_job(self, message: str, role: str) -> str:
+        jid = str(uuid.uuid4())
+        with self._lock:
+            with self._conn() as conn:
+                conn.execute(
+                    "INSERT INTO jobs(id, message, role, status, result, created_at) VALUES (?,?,?,?,?,?)",
+                    (jid, message, role, "queued", None, datetime.utcnow().isoformat()),
+                )
+        return jid
+
+    def update_job(self, job_id: str, **fields: object) -> None:
+        if not fields:
+            return
+        with self._lock:
+            sets = []
+            values = []
+            for k, v in fields.items():
+                sets.append(f"{k}=?")
+                values.append(v)
+            values.append(job_id)
+            with self._conn() as conn:
+                conn.execute(f"UPDATE jobs SET {', '.join(sets)} WHERE id=?", tuple(values))
+
+    def get_job(self, job_id: str) -> dict | None:
+        with self._conn() as conn:
+            row = conn.execute("SELECT * FROM jobs WHERE id=?", (job_id,)).fetchone()
+        if not row:
+            return None
+        return dict(row)
+
+    def list_jobs(self, limit: int = 100) -> list[dict]:
+        with self._conn() as conn:
+            rows = conn.execute("SELECT * FROM jobs ORDER BY created_at DESC LIMIT ?", (limit,)).fetchall()
+        return [dict(r) for r in rows][::-1]
+
+    def create_approval(self, job_id: str, action: str, payload: dict) -> str:
+        import json
+        aid = str(uuid.uuid4())
+        with self._lock:
+            with self._conn() as conn:
+                conn.execute(
+                    "INSERT INTO approvals(id, job_id, action, payload, status, created_at) VALUES (?,?,?,?,?,?)",
+                    (aid, job_id, action, json.dumps(payload), "pending", datetime.utcnow().isoformat()),
+                )
+        return aid
+
+    def set_approval_status(self, approval_id: str, status: str) -> None:
+        with self._lock:
+            with self._conn() as conn:
+                conn.execute("UPDATE approvals SET status=? WHERE id=?", (status, approval_id))
+
+    def get_approval(self, approval_id: str) -> dict | None:
+        import json
+        with self._conn() as conn:
+            row = conn.execute("SELECT * FROM approvals WHERE id=?", (approval_id,)).fetchone()
+        if not row:
+            return None
+        obj = dict(row)
+        obj["payload"] = json.loads(obj["payload"])
+        return obj
+
+    def list_approvals(self, limit: int = 100) -> list[dict]:
+        import json
+        with self._conn() as conn:
+            rows = conn.execute("SELECT * FROM approvals ORDER BY created_at DESC LIMIT ?", (limit,)).fetchall()
+        out = []
+        for r in rows[::-1]:
+            obj = dict(r)
+            obj["payload"] = json.loads(obj["payload"])
+            out.append(obj)
+        return out

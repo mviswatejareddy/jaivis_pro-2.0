@@ -1,0 +1,12 @@
+numpy
+scikit-learn
+joblib
+torch
+pyttsx3
+SpeechRecognition
+pyaudio
+fastapi
+uvicorn
+pydantic
+requests
+PyJWT

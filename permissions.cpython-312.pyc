@@ -1,0 +1,57 @@
+from __future__ import annotations
+
+import json
+from pathlib import Path
+
+import joblib
+from sklearn.feature_extraction.text import TfidfVectorizer
+from sklearn.linear_model import LogisticRegression
+from sklearn.metrics import classification_report
+from sklearn.model_selection import train_test_split
+from sklearn.pipeline import Pipeline
+
+
+ROOT = Path(__file__).resolve().parents[3]
+DATA_PATH = ROOT / "src" / "jarvis" / "data" / "intents.json"
+MODEL_PATH = ROOT / "models" / "intent_ml.joblib"
+
+
+def load_data() -> tuple[list[str], list[str]]:
+    with DATA_PATH.open("r", encoding="utf-8") as f:
+        data = json.load(f)
+
+    texts: list[str] = []
+    labels: list[str] = []
+    for item in data["intents"]:
+        tag = item["tag"]
+        for pattern in item["patterns"]:
+            texts.append(pattern)
+            labels.append(tag)
+    return texts, labels
+
+
+def train() -> None:
+    texts, labels = load_data()
+
+    x_train, x_test, y_train, y_test = train_test_split(
+        texts, labels, test_size=0.25, random_state=42, stratify=labels
+    )
+
+    pipeline = Pipeline(
+        [
+            ("tfidf", TfidfVectorizer(ngram_range=(1, 2))),
+            ("clf", LogisticRegression(max_iter=500)),
+        ]
+    )
+
+    pipeline.fit(x_train, y_train)
+    preds = pipeline.predict(x_test)
+    print(classification_report(y_test, preds))
+
+    MODEL_PATH.parent.mkdir(parents=True, exist_ok=True)
+    joblib.dump({"pipeline": pipeline, "labels": list(pipeline.classes_)}, MODEL_PATH)
+    print(f"ML model saved to: {MODEL_PATH}")
+
+
+if __name__ == "__main__":
+    train()

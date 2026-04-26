@@ -1,0 +1,39 @@
+from __future__ import annotations
+
+import json
+from pathlib import Path
+
+import numpy as np
+from sklearn.feature_extraction.text import TfidfVectorizer
+from sklearn.metrics.pairwise import cosine_similarity
+
+
+class VectorMemory:
+    def __init__(self, data_dir: Path) -> None:
+        self.path = data_dir / "memory.jsonl"
+        data_dir.mkdir(parents=True, exist_ok=True)
+        if not self.path.exists():
+            self.path.write_text("", encoding="utf-8")
+
+    def add(self, text: str, meta: dict | None = None) -> None:
+        row = {"text": text, "meta": meta or {}}
+        with self.path.open("a", encoding="utf-8") as f:
+            f.write(json.dumps(row) + "\n")
+
+    def query(self, text: str, top_k: int = 3) -> list[str]:
+        rows: list[dict] = []
+        for line in self.path.read_text(encoding="utf-8").splitlines():
+            if line.strip():
+                rows.append(json.loads(line))
+        if not rows:
+            return []
+        corpus = [r["text"] for r in rows]
+        vec = TfidfVectorizer(ngram_range=(1, 2))
+        mat = vec.fit_transform(corpus + [text])
+        q = mat[-1]
+        m = mat[:-1]
+        sims = cosine_similarity(q, m)[0]
+        if len(sims) == 0:
+            return []
+        idx = np.argsort(sims)[::-1][:top_k]
+        return [corpus[i] for i in idx if sims[i] > 0.1]

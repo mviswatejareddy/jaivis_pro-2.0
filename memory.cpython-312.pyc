@@ -1,0 +1,28 @@
+from __future__ import annotations
+
+import pyttsx3
+
+
+class Speaker:
+    def __init__(self) -> None:
+        self.engine = pyttsx3.init()
+        self.engine.setProperty("rate", 175)
+        self._set_female_voice()
+
+    def _set_female_voice(self) -> None:
+        voices = self.engine.getProperty("voices")
+        if not voices:
+            return
+        female_candidates = []
+        for v in voices:
+            meta = f"{getattr(v, 'name', '')} {getattr(v, 'id', '')}".lower()
+            if any(k in meta for k in ["female", "zira", "hazel", "susan", "samantha"]):
+                female_candidates.append(v)
+        selected = female_candidates[0] if female_candidates else voices[0]
+        self.engine.setProperty("voice", selected.id)
+
+    def say(self, text: str) -> None:
+        if "boss" not in text.lower():
+            text = f"{text} Boss."
+        self.engine.say(text)
+        self.engine.runAndWait()

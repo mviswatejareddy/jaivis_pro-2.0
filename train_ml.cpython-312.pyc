@@ -1,0 +1,11 @@
+from __future__ import annotations
+
+
+def should_process(text: str, wake_word: str = "jarvis", strict: bool = False) -> bool:
+    if not strict:
+        return True
+    return wake_word.lower() in text.lower()
+
+
+def strip_wake_word(text: str, wake_word: str = "jarvis") -> str:
+    return text.lower().replace(wake_word.lower(), "").strip(" ,.:;!-")

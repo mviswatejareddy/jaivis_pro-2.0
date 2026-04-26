@@ -1,0 +1,8 @@
+{
+  "news": {
+    "url": "https://api.duckduckgo.com/",
+    "method": "GET",
+    "query_param": "q",
+    "auth_env": ""
+  }
+}

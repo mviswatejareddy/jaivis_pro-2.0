@@ -1,0 +1,122 @@
+from __future__ import annotations
+
+import json
+import re
+from pathlib import Path
+
+import torch
+import torch.nn as nn
+from torch.utils.data import DataLoader, TensorDataset
+
+
+ROOT = Path(__file__).resolve().parents[3]
+DATA_PATH = ROOT / "src" / "jarvis" / "data" / "intents.json"
+MODEL_PATH = ROOT / "models" / "intent_dl.pt"
+
+MAX_LEN = 16
+EMBED_DIM = 64
+HIDDEN_DIM = 96
+BATCH_SIZE = 8
+EPOCHS = 40
+LR = 2e-3
+
+
+def tokenize(text: str) -> list[str]:
+    return re.findall(r"[a-z0-9]+", text.lower())
+
+
+def encode_text(text: str, vocab: dict[str, int], max_len: int) -> list[int]:
+    tokens = tokenize(text)
+    ids = [vocab.get(tok, vocab["<unk>"]) for tok in tokens][:max_len]
+    if len(ids) < max_len:
+        ids.extend([vocab["<pad>"]] * (max_len - len(ids)))
+    return ids
+
+
+class NeuralIntentClassifier(nn.Module):
+    def __init__(self, vocab_size: int, num_classes: int) -> None:
+        super().__init__()
+        self.embedding = nn.Embedding(vocab_size, EMBED_DIM, padding_idx=0)
+        self.lstm = nn.LSTM(EMBED_DIM, HIDDEN_DIM, batch_first=True, bidirectional=True)
+        self.dropout = nn.Dropout(0.25)
+        self.fc = nn.Linear(HIDDEN_DIM * 2, num_classes)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        emb = self.embedding(x)
+        _, (hidden, _) = self.lstm(emb)
+        h_fw = hidden[-2]
+        h_bw = hidden[-1]
+        h = torch.cat([h_fw, h_bw], dim=1)
+        h = self.dropout(h)
+        return self.fc(h)
+
+
+def load_dataset() -> tuple[list[str], list[str]]:
+    with DATA_PATH.open("r", encoding="utf-8") as f:
+        data = json.load(f)
+
+    texts: list[str] = []
+    labels: list[str] = []
+    for intent in data["intents"]:
+        for p in intent["patterns"]:
+            texts.append(p)
+            labels.append(intent["tag"])
+    return texts, labels
+
+
+def build_vocab(texts: list[str]) -> dict[str, int]:
+    vocab = {"<pad>": 0, "<unk>": 1}
+    for text in texts:
+        for token in tokenize(text):
+            if token not in vocab:
+                vocab[token] = len(vocab)
+    return vocab
+
+
+def train() -> None:
+    texts, label_names = load_dataset()
+    labels = sorted(set(label_names))
+    label_to_idx = {v: i for i, v in enumerate(labels)}
+    y = [label_to_idx[x] for x in label_names]
+
+    vocab = build_vocab(texts)
+    x = [encode_text(t, vocab, MAX_LEN) for t in texts]
+
+    x_tensor = torch.tensor(x, dtype=torch.long)
+    y_tensor = torch.tensor(y, dtype=torch.long)
+
+    dataset = TensorDataset(x_tensor, y_tensor)
+    loader = DataLoader(dataset, batch_size=BATCH_SIZE, shuffle=True)
+
+    model = NeuralIntentClassifier(vocab_size=len(vocab), num_classes=len(labels))
+    criterion = nn.CrossEntropyLoss()
+    optimizer = torch.optim.Adam(model.parameters(), lr=LR)
+
+    model.train()
+    for epoch in range(EPOCHS):
+        running_loss = 0.0
+        for xb, yb in loader:
+            optimizer.zero_grad()
+            logits = model(xb)
+            loss = criterion(logits, yb)
+            loss.backward()
+            optimizer.step()
+            running_loss += loss.item()
+        if (epoch + 1) % 10 == 0:
+            print(f"epoch={epoch+1}/{EPOCHS} loss={running_loss/len(loader):.4f}")
+
+    MODEL_PATH.parent.mkdir(parents=True, exist_ok=True)
+    torch.save(
+        {
+            "state_dict": model.state_dict(),
+            "vocab": vocab,
+            "labels": labels,
+            "max_len": MAX_LEN,
+        },
+        MODEL_PATH,
+    )
+    print(f"DL model saved to: {MODEL_PATH}")
+
+
+if __name__ == "__main__":
+    train()
